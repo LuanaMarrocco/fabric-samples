@@ -35,20 +35,19 @@ export VERBOSE=false
 # Print the usage message
 function printHelp() {
   echo "Usage: "
-  echo "  byfn.sh <mode> [-c <channel name>] [-t <timeout>] [-d <delay>] [-f <docker-compose-file>] [-s <dbtype>] [-l <language>] [-o <consensus-type>] [-i <imagetag>] [-v]"
+  echo "  byfn.sh <mode> [-c <channel name>] [-t <timeout>] [-d <delay>] [-f <docker-compose-file>] [-s <dbtype>] [-l <language>] [-i <imagetag>] [-v]"
   echo "    <mode> - one of 'up', 'down', 'restart', 'generate' or 'upgrade'"
   echo "      - 'up' - bring up the network with docker-compose up"
   echo "      - 'down' - clear the network with docker-compose down"
   echo "      - 'restart' - restart the network"
   echo "      - 'generate' - generate required certificates and genesis block"
-  echo "      - 'upgrade'  - upgrade the network from version 1.3.x to 1.4.0"
+  echo "      - 'upgrade'  - upgrade the network from version 1.1.x to 1.2.x"
   echo "    -c <channel name> - channel name to use (defaults to \"mychannel\")"
   echo "    -t <timeout> - CLI timeout duration in seconds (defaults to 10)"
   echo "    -d <delay> - delay duration in seconds (defaults to 3)"
   echo "    -f <docker-compose-file> - specify which docker-compose file use (defaults to docker-compose-cli.yaml)"
   echo "    -s <dbtype> - the database backend to use: goleveldb (default) or couchdb"
   echo "    -l <language> - the chaincode language: golang (default) or node"
-  echo "    -o <consensus-type> - the consensus-type of the ordering service: solo (default) or kafka"
   echo "    -i <imagetag> - the tag to be used to launch the network (defaults to \"latest\")"
   echo "    -v - verbose mode"
   echo "  byfn.sh -h (print this message)"
@@ -58,7 +57,7 @@ function printHelp() {
   echo
   echo "	byfn.sh generate -c mychannel"
   echo "	byfn.sh up -c mychannel -s couchdb"
-  echo "        byfn.sh up -c mychannel -s couchdb -i 1.4.0"
+  echo "        byfn.sh up -c mychannel -s couchdb -i 1.2.x"
   echo "	byfn.sh up -l node"
   echo "	byfn.sh down -c mychannel"
   echo "        byfn.sh upgrade -c mychannel"
@@ -157,29 +156,14 @@ function networkUp() {
     generateChannelArtifacts
   fi
   if [ "${IF_COUCHDB}" == "couchdb" ]; then
-    if [ "$CONSENSUS_TYPE" == "kafka" ]; then
-      IMAGE_TAG=$IMAGETAG docker-compose -f $COMPOSE_FILE -f $COMPOSE_FILE_KAFKA -f $COMPOSE_FILE_COUCH up -d 2>&1
-    else
-      IMAGE_TAG=$IMAGETAG docker-compose -f $COMPOSE_FILE -f $COMPOSE_FILE_COUCH up -d 2>&1
-    fi
+    IMAGE_TAG=$IMAGETAG docker-compose -f $COMPOSE_FILE -f $COMPOSE_FILE_COUCH up -d 2>&1
   else
-    if [ "$CONSENSUS_TYPE" == "kafka" ]; then
-      IMAGE_TAG=$IMAGETAG docker-compose -f $COMPOSE_FILE -f $COMPOSE_FILE_KAFKA up -d 2>&1
-    else
-      IMAGE_TAG=$IMAGETAG docker-compose -f $COMPOSE_FILE up -d 2>&1
-    fi
+    IMAGE_TAG=$IMAGETAG docker-compose -f $COMPOSE_FILE up -d 2>&1
   fi
   if [ $? -ne 0 ]; then
     echo "ERROR !!!! Unable to start network"
     exit 1
   fi
-
-  if [ "$CONSENSUS_TYPE" == "kafka" ]; then
-    sleep 1
-    echo "Sleeping 10s to allow kafka cluster to complete booting"
-    sleep 9
-  fi
-
   # now run the end to end script
   docker exec cli scripts/script.sh $CHANNEL_NAME $CLI_DELAY $LANGUAGE $CLI_TIMEOUT $VERBOSE
   if [ $? -ne 0 ]; then
@@ -188,82 +172,69 @@ function networkUp() {
   fi
 }
 
-# Upgrade the network components which are at version 1.3.x to 1.4.x
+# Upgrade the network components which are at version 1.1.x to 1.2.x
 # Stop the orderer and peers, backup the ledger for orderer and peers, cleanup chaincode containers and images
 # and relaunch the orderer and peers with latest tag
 function upgradeNetwork() {
-  if [[ "$IMAGETAG" == *"1.4"* ]] || [[ $IMAGETAG == "latest" ]]; then
-    docker inspect -f '{{.Config.Volumes}}' orderer.example.com | grep -q '/var/hyperledger/production/orderer'
-    if [ $? -ne 0 ]; then
-      echo "ERROR !!!! This network does not appear to start with fabric-samples >= v1.3.x?"
-      exit 1
-    fi
+  docker inspect -f '{{.Config.Volumes}}' orderer.example.com | grep -q '/var/hyperledger/production/orderer'
+  if [ $? -ne 0 ]; then
+    echo "ERROR !!!! This network does not appear to be using volumes for its ledgers, did you start from fabric-samples >= v1.1.x?"
+    exit 1
+  fi
 
-    LEDGERS_BACKUP=./ledgers-backup
+  LEDGERS_BACKUP=./ledgers-backup
 
-    # create ledger-backup directory
-    mkdir -p $LEDGERS_BACKUP
+  # create ledger-backup directory
+  mkdir -p $LEDGERS_BACKUP
 
-    export IMAGE_TAG=$IMAGETAG
-    if [ "${IF_COUCHDB}" == "couchdb" ]; then
-      if [ "$CONSENSUS_TYPE" == "kafka" ]; then
-        COMPOSE_FILES="-f $COMPOSE_FILE -f $COMPOSE_FILE_KAFKA -f $COMPOSE_FILE_COUCH"
-      else
-        COMPOSE_FILES="-f $COMPOSE_FILE -f $COMPOSE_FILE_COUCH"
-      fi
-    else
-      if [ "$CONSENSUS_TYPE" == "kafka" ]; then
-        COMPOSE_FILES="-f $COMPOSE_FILE -f $COMPOSE_FILE_KAFKA"
-      else
-        COMPOSE_FILES="-f $COMPOSE_FILE"
-      fi
-    fi
-
-    # removing the cli container
-    docker-compose $COMPOSE_FILES stop cli
-    docker-compose $COMPOSE_FILES up -d --no-deps cli
-
-    echo "Upgrading orderer"
-    docker-compose $COMPOSE_FILES stop orderer.example.com
-    docker cp -a orderer.example.com:/var/hyperledger/production/orderer $LEDGERS_BACKUP/orderer.example.com
-    docker-compose $COMPOSE_FILES up -d --no-deps orderer.example.com
-
-    for PEER in peer0.org1.example.com peer1.org1.example.com peer0.org2.example.com peer1.org2.example.com; do
-      echo "Upgrading peer $PEER"
-
-      # Stop the peer and backup its ledger
-      docker-compose $COMPOSE_FILES stop $PEER
-      docker cp -a $PEER:/var/hyperledger/production $LEDGERS_BACKUP/$PEER/
-
-      # Remove any old containers and images for this peer
-      CC_CONTAINERS=$(docker ps | grep dev-$PEER | awk '{print $1}')
-      if [ -n "$CC_CONTAINERS" ]; then
-        docker rm -f $CC_CONTAINERS
-      fi
-      CC_IMAGES=$(docker images | grep dev-$PEER | awk '{print $1}')
-      if [ -n "$CC_IMAGES" ]; then
-        docker rmi -f $CC_IMAGES
-      fi
-
-      # Start the peer again
-      docker-compose $COMPOSE_FILES up -d --no-deps $PEER
-    done
-
-    docker exec cli scripts/upgrade_to_v14.sh $CHANNEL_NAME $CLI_DELAY $LANGUAGE $CLI_TIMEOUT $VERBOSE
-    if [ $? -ne 0 ]; then
-      echo "ERROR !!!! Test failed"
-      exit 1
-    fi
+  export IMAGE_TAG=$IMAGETAG
+  if [ "${IF_COUCHDB}" == "couchdb" ]; then
+    COMPOSE_FILES="-f $COMPOSE_FILE -f $COMPOSE_FILE_COUCH"
   else
-    echo "ERROR !!!! Pass the v1.4.x image tag"
+    COMPOSE_FILES="-f $COMPOSE_FILE"
+  fi
+
+  # removing the cli container
+  docker-compose $COMPOSE_FILES stop cli
+  docker-compose $COMPOSE_FILES up -d --no-deps cli
+
+  echo "Upgrading orderer"
+  docker-compose $COMPOSE_FILES stop orderer.example.com
+  docker cp -a orderer.example.com:/var/hyperledger/production/orderer $LEDGERS_BACKUP/orderer.example.com
+  docker-compose $COMPOSE_FILES up -d --no-deps orderer.example.com
+
+  for PEER in peer0.org1.example.com peer1.org1.example.com peer0.org2.example.com peer1.org2.example.com; do
+    echo "Upgrading peer $PEER"
+
+    # Stop the peer and backup its ledger
+    docker-compose $COMPOSE_FILES stop $PEER
+    docker cp -a $PEER:/var/hyperledger/production $LEDGERS_BACKUP/$PEER/
+
+    # Remove any old containers and images for this peer
+    CC_CONTAINERS=$(docker ps | grep dev-$PEER | awk '{print $1}')
+    if [ -n "$CC_CONTAINERS" ]; then
+      docker rm -f $CC_CONTAINERS
+    fi
+    CC_IMAGES=$(docker images | grep dev-$PEER | awk '{print $1}')
+    if [ -n "$CC_IMAGES" ]; then
+      docker rmi -f $CC_IMAGES
+    fi
+
+    # Start the peer again
+    docker-compose $COMPOSE_FILES up -d --no-deps $PEER
+  done
+
+  docker exec cli scripts/upgrade_to_v12.sh $CHANNEL_NAME $CLI_DELAY $LANGUAGE $CLI_TIMEOUT $VERBOSE
+  if [ $? -ne 0 ]; then
+    echo "ERROR !!!! Test failed"
+    exit 1
   fi
 }
 
 # Tear down running network
 function networkDown() {
   # stop org3 containers also in addition to org1 and org2, in case we were running sample to add org3
-  # stop kafka and zookeeper containers in case we're running with kafka consensus-type
-  docker-compose -f $COMPOSE_FILE -f $COMPOSE_FILE_COUCH -f $COMPOSE_FILE_KAFKA -f $COMPOSE_FILE_ORG3 down --volumes --remove-orphans
+  docker-compose -f $COMPOSE_FILE -f $COMPOSE_FILE_COUCH -f $COMPOSE_FILE_ORG3 down --volumes --remove-orphans
 
   # Don't remove the generated artifacts -- note, the ledgers are always removed
   if [ "$MODE" != "restart" ]; then
@@ -407,17 +378,8 @@ function generateChannelArtifacts() {
   echo "##########################################################"
   # Note: For some unknown reason (at least for now) the block file can't be
   # named orderer.genesis.block or the orderer will fail to launch!
-  echo "CONSENSUS_TYPE="$CONSENSUS_TYPE
   set -x
-  if [ "$CONSENSUS_TYPE" == "solo" ]; then
-    configtxgen -profile TwoOrgsOrdererGenesis -channelID byfn-sys-channel -outputBlock ./channel-artifacts/genesis.block
-  elif [ "$CONSENSUS_TYPE" == "kafka" ]; then
-    configtxgen -profile SampleDevModeKafka -channelID byfn-sys-channel -outputBlock ./channel-artifacts/genesis.block
-  else
-    set +x
-    echo "unrecognized CONSESUS_TYPE='$CONSENSUS_TYPE'. exiting"
-    exit 1
-  fi
+  configtxgen -profile TwoOrgsOrdererGenesis -outputBlock ./channel-artifacts/genesis.block
   res=$?
   set +x
   if [ $res -ne 0 ]; then
@@ -482,15 +444,11 @@ COMPOSE_FILE=docker-compose-cli.yaml
 COMPOSE_FILE_COUCH=docker-compose-couch.yaml
 # org3 docker compose file
 COMPOSE_FILE_ORG3=docker-compose-org3.yaml
-# kafka and zookeeper compose file
-COMPOSE_FILE_KAFKA=docker-compose-kafka.yaml
 #
 # use golang as the default language for chaincode
 LANGUAGE=golang
 # default image tag
 IMAGETAG="latest"
-# default consensus type
-CONSENSUS_TYPE="solo"
 # Parse commandline args
 if [ "$1" = "-m" ]; then # supports old usage, muscle memory is powerful!
   shift
@@ -513,7 +471,7 @@ else
   exit 1
 fi
 
-while getopts "h?c:t:d:f:s:l:i:o:v" opt; do
+while getopts "h?c:t:d:f:s:l:i:v" opt; do
   case "$opt" in
   h | \?)
     printHelp
@@ -539,9 +497,6 @@ while getopts "h?c:t:d:f:s:l:i:o:v" opt; do
     ;;
   i)
     IMAGETAG=$(go env GOARCH)"-"$OPTARG
-    ;;
-   o)
-    CONSENSUS_TYPE=$OPTARG
     ;;
   v)
     VERBOSE=true
@@ -573,7 +528,7 @@ elif [ "${MODE}" == "generate" ]; then ## Generate Artifacts
 elif [ "${MODE}" == "restart" ]; then ## Restart the network
   networkDown
   networkUp
-elif [ "${MODE}" == "upgrade" ]; then ## Upgrade the network from version 1.2.x to 1.3.x
+elif [ "${MODE}" == "upgrade" ]; then ## Upgrade the network from version 1.1.x to 1.2.x
   upgradeNetwork
 else
   printHelp
