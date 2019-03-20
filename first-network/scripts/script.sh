@@ -126,8 +126,17 @@ echo "SetUp Voting chaincode on peer0.org1 and peer0.org2..."
 setUpVoting 0 1 0 2
 
 sleep 15 
-chaincodeInvokeVoting 0 1 0 2
-chaincodeQueryVoter 0 1 100
+chaincodeInvokeInitVoter 0 1 0 2
+sleep 15
+chaincodeInvokeInitCandidate 0 1 0 2
+sleep 15
+chaincodeInvokeVote 0 1 0 2
+sleep 15
+chaincodeQueryVoter 0 1
+sleep 15
+chaincodeQueryCandidate 0 2
+
+
 
 
 
