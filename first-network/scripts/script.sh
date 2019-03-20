@@ -75,13 +75,13 @@ createChannel
 echo "Having all peers join the channel..."
 joinChannel
 
-## Set the anchor peers for each org in the channel
+# Set the anchor peers for each org in the channel
 echo "Updating anchor peers for org1..."
 updateAnchorPeers 0 1
 echo "Updating anchor peers for org2..."
 updateAnchorPeers 0 2
 
-# ## Install chaincode on peer0.org1 and peer0.org2
+# # Install chaincode on peer0.org1 and peer0.org2
 # echo "Installing chaincode on peer0.org1..."
 # installChaincode 0 1
 # echo "Install chaincode on peer0.org2..."
@@ -100,13 +100,21 @@ updateAnchorPeers 0 2
 # echo "Sending invoke transaction on peer0.org1 peer0.org2..."
 # chaincodeInvoke 0 1 0 2
 
-# ## Install chaincode on peer1.org2
-# echo "Installing chaincode on peer1.org2..."
-# installChaincode 1 2
+# # Query chaincode on peer0.org1
+# echo "Querying chaincode on peer0.org1..."
+# chaincodeQuery 0 1 90
+
+# # ## Install chaincode on peer1.org2
+# # echo "Installing chaincode on peer1.org2..."
+# # installChaincode 1 2
+
+# # Query chaincode on peer0.org1
+# echo "Querying chaincode on peer0.org1..."
+# chaincodeQuery 0 1 90
 
 # # Query on chaincode on peer1.org2, check if the result is 90
 # echo "Querying chaincode on peer1.org2..."
-# chaincodeQuery 1 2 90
+# chaincodeQuery 0 2 90
 
 ###########################################################
 ## Install voting chaincode on peer0.org1 and peer0.org2 ##
@@ -114,11 +122,12 @@ updateAnchorPeers 0 2
 echo
 echo "========= NOW MY CHAINCODE =========== "
 echo
-echo "SetUp Voting chaincode on peer0.org1..."
-setUpVoting 0 1 
-setUpVoting 0 2
-echo "SetUp Voting chaincode on peer0.org1..."
-testVoting
+echo "SetUp Voting chaincode on peer0.org1 and peer0.org2..."
+setUpVoting 0 1 0 2
+
+sleep 15 
+chaincodeInvokeVoting 0 1 0 2
+chaincodeQueryVoter 0 1 100
 
 
 
